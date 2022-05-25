@@ -1,0 +1,476 @@
+import numpy as np
+import pandas as pd
+import math
+import statistics as sta
+import os
+import fiona                               # Para crear shape
+import logging
+from pprint import pprint
+
+from random import shuffle
+import matplotlib.pyplot as plt
+
+import geopandas as gpd
+import descartes
+
+
+from sklearn.linear_model import LinearRegression
+
+import contextily as ctx
+from shapely.ops import cascaded_union
+from shapely.geometry import Point, Polygon
+
+from geovoronoi import coords_to_points, voronoi_regions_from_coords
+from geovoronoi.plotting import subplot_for_map, plot_voronoi_polys_with_points_in_area
+
+
+cm = 1/2.54
+
+os.chdir('Input')
+
+CBOG2018   = pd.read_csv('2018CongBog.csv')
+
+JAL2019Z9  = pd.read_csv('2019_JAL_FONTIBON.csv')
+CBOG2022CJ = pd.read_csv('2022_Cong_Bog_CatJuv.csv')
+
+Coor_PV   = pd.read_csv('Coor_Puestos.csv')
+Pts_CallesZ9  = np.loadtxt('P_Calles.txt')
+
+
+LocShape  = gpd.read_file('20191025particelectoral2018shp/20191025ParticElectoral2018.shp')
+
+
+vias = gpd.read_file('Malla_Vial_Integral_Bogota_D_C/Malla_Vial_Integral_Bogota_D_C_web.shp')
+
+os.chdir('..')
+
+
+os.chdir('Output')
+
+NumMesas  = []
+TotVot    = []
+
+for i in range(len(LocShape)):
+    Cond      = CBOG2022CJ['LOCALIDAD'] == LocShape.LOCNOMBRE[i]
+    
+    TotVot.append(sum(Cond*CBOG2022CJ['VOTOS']))
+    NumMesas.append(sum(Cond))
+    
+DFLocCJ   = pd.DataFrame()
+
+DFLocCJ['LOCNOMBRE'] = LocShape.LOCNOMBRE
+DFLocCJ['TOTAL_VOTOS'] = TotVot
+DFLocCJ['NUM_MESAS'] = NumMesas
+DFLocCJ['VOTOS/MESAS'] = np.array(TotVot)/np.array(NumMesas)
+
+DFLocCJ.to_csv('2022_JUVINADO_Localidades.csv')
+
+os.chdir('..')
+
+
+os.chdir('Output')
+
+WhoP      = np.unique(JAL2019Z9['NOM_SITIO'])
+
+TVot      = []
+TVoP      = []
+NumP      = []
+PusV      = []
+
+
+for i in range(len(WhoP)):
+    Cond  = JAL2019Z9['NOM_SITIO'] == WhoP[i]
+    
+    PusV.append(sum(Cond))
+    TVot.append(sum(Cond*JAL2019Z9['VOTOS_JULIAN_TRIANA']))
+    NumP.append(max(Cond*JAL2019Z9['NUM_PUESTO']))
+
+    
+DFJTLoc   = pd.DataFrame()
+
+DFJTLoc['PUESTO'] = NumP
+DFJTLoc['NOM_PUESTO'] = WhoP
+DFJTLoc['TOTAL_VOTOS'] = TVot
+DFJTLoc['NOM_MESAS'] = PusV#
+DFJTLoc['VOTOS/MESAS'] = np.array(TVot)/np.array(PusV)
+DFJTLoc = DFJTLoc.sort_values(by=['PUESTO'])
+DFJTLoc = DFJTLoc.reset_index(drop=True)
+
+DFJTLoc.to_csv('2019_TRIANA_Fontibon.csv')
+
+os.chdir('..')
+
+Whe       = np.where(Coor_PV['Nombre de localidad']== 'FONTIBÓN')
+WhoX      = []
+WhoY      = []
+Col_JT    = []
+Co2_JT    = []
+num       = []
+name      = []
+
+
+for i in range(len(DFJTLoc)):
+    num.append([Coor_PV['Número del puesto'][Whe[0][i]]][0])
+    name.append([Coor_PV['Nombre del puesto'][Whe[0][i]]][0])
+    WhoX.append([Coor_PV['CoorX'][Whe[0][i]]][0])
+    WhoY.append([Coor_PV['CoorY'][Whe[0][i]]][0])
+    
+    Coli   = DFJTLoc['VOTOS/MESAS'][i]/max(DFJTLoc['VOTOS/MESAS'])
+    Col_JT.append([1-Coli,1-Coli,1-Coli])
+
+    Coli   = DFJTLoc['TOTAL_VOTOS'][i]/max(DFJTLoc['TOTAL_VOTOS'])
+    Co2_JT.append([1-Coli,1-Coli,1-Coli])
+
+    
+logging.basicConfig(level=logging.INFO)
+geovoronoi_log = logging.getLogger('geovoronoi')
+geovoronoi_log.setLevel(logging.INFO)
+geovoronoi_log.propagate = True
+
+#%%
+
+area = LocShape[LocShape.LOCNOMBRE == 'FONTIBÓN']
+assert len(area) == 1
+
+#area = area.to_crs(epsg=3395)    # convert to World Mercator CRS
+
+area_shapeJT = area.iloc[0].geometry   # get the Polygon
+
+coords = np.vstack((WhoX, WhoY)).T
+
+ptsJT = [p for p in coords_to_points(coords) if p.within(area_shapeJT)]  # converts to shapely Point
+del coords   # not used any more
+
+region_polysJT, region_ptsJT, unassigned_ptsJT = voronoi_regions_from_coords(ptsJT, area_shapeJT,
+                                                                       return_unassigned_points=True,
+                                                                       per_geom=True)  # this is the default
+
+Col_VM_JT = []
+Col_VT_JT = []
+num2      = []
+
+for i in range(len(region_ptsJT)):
+    num2.append(num[region_ptsJT[i][0]])
+    Col_VM_JT.append(Col_JT[region_ptsJT[i][0]])
+    Col_VT_JT.append(Co2_JT[region_ptsJT[i][0]])
+    
+    
+CongBog2018  = []
+NumLoc       = list(set(CBOG2018['ZZ']))
+
+for i in range(len(NumLoc)):
+    DFCon = pd.DataFrame()
+    
+    Whe   = np.where(CBOG2018['ZZ']==NumLoc[i])[0]
+    
+    NumP  = CBOG2018['PP'][Whe]
+    NomP  = CBOG2018['Npuesto'][Whe]
+    MesNo = CBOG2018['mesa'][Whe]
+    Part  = CBOG2018['partido'][Whe]
+    Voto  = CBOG2018['votos'][Whe]
+    
+    DFCon['NumPuesto']   = NumP
+    DFCon['NomPuesto']   = NomP
+    DFCon['NumMesa']     = MesNo
+    DFCon['Partido']     = Part
+    DFCon['Votos']       = Voto
+
+    
+    DFCon = DFCon.reset_index(drop=True)
+    CongBog2018.append(DFCon)
+    
+    
+WhoLoc       = 8
+
+WhoNumP      = np.unique(CongBog2018[WhoLoc]['NumPuesto'])
+NumP         = []
+NomP         = []
+PVerde       = []
+PCamRa       = []
+PCenDem      = []
+PConsev      = []
+PLibera      = []
+PPoloDe      = []
+PDelaU       = []
+PGanador     = []
+
+Partidos     = ['VERDE','CAMBIO_RADICAL','CENTRO_DEMOCRATICO','CONSERVADOR','LIBERAL','POLO','LaU']
+
+for i in range(len(WhoNumP)):
+    VotosPuesto = []
+    
+    Whe   = np.where(CongBog2018[WhoLoc]['NumPuesto']==WhoNumP[i])[0]
+    
+    NumP.append(WhoNumP[i])
+    NomP.append(CongBog2018[WhoLoc]['NomPuesto'][Whe[0]])
+    
+    CondP    = CongBog2018[WhoLoc]['NumPuesto']==WhoNumP[i]
+
+    Cond     = CongBog2018[WhoLoc]['Partido']=='PARTIDO ALIANZA VERDE'
+    PVerde.append(sum(CondP*Cond*CongBog2018[WhoLoc]['Votos']))
+    VotosPuesto.append(sum(CondP*Cond*CongBog2018[WhoLoc]['Votos']))
+    
+    Cond  = CongBog2018[WhoLoc]['Partido']=='PARTIDO CAMBIO RADICAL'
+    PCamRa.append(sum(CondP*Cond*CongBog2018[WhoLoc]['Votos']))
+    VotosPuesto.append(sum(CondP*Cond*CongBog2018[WhoLoc]['Votos']))
+    
+    Cond  = CongBog2018[WhoLoc]['Partido']=='PARTIDO CENTRO DEMOCRÁTICO'
+    PCenDem.append(sum(CondP*Cond*CongBog2018[WhoLoc]['Votos']))
+    VotosPuesto.append(sum(CondP*Cond*CongBog2018[WhoLoc]['Votos']))
+    
+    Cond  = CongBog2018[WhoLoc]['Partido']=='PARTIDO CONSERVADOR COLOMBIANO'
+    PConsev.append(sum(CondP*Cond*CongBog2018[WhoLoc]['Votos']))
+    VotosPuesto.append(sum(CondP*Cond*CongBog2018[WhoLoc]['Votos']))
+    
+    Cond  = CongBog2018[WhoLoc]['Partido']=='PARTIDO LIBERAL COLOMBIANO'
+    PLibera.append(sum(CondP*Cond*CongBog2018[WhoLoc]['Votos']))
+    VotosPuesto.append(sum(CondP*Cond*CongBog2018[WhoLoc]['Votos']))
+
+    Cond  = CongBog2018[WhoLoc]['Partido']=='PARTIDO POLO DEMOCRÁTICO ALTERNATIVO'
+    PPoloDe.append(sum(CondP*Cond*CongBog2018[WhoLoc]['Votos']))
+    VotosPuesto.append(sum(CondP*Cond*CongBog2018[WhoLoc]['Votos']))
+
+    Cond  = CongBog2018[WhoLoc]['Partido']=='PARTIDO SOCIAL DE UNIDAD NACIONAL PARTIDO DE LA U'
+    PDelaU.append(sum(CondP*Cond*CongBog2018[WhoLoc]['Votos']))
+    VotosPuesto.append(sum(CondP*Cond*CongBog2018[WhoLoc]['Votos']))
+    
+    PGanador.append(int(np.where(np.array(VotosPuesto)==max(VotosPuesto))[0]))
+    
+    DFConLoc = pd.DataFrame()
+
+    DFConLoc['NumPuesto']          = NumP
+    DFConLoc['NomPuesto']          = NomP
+        
+    DFConLoc['PARTIDO_VERDE']      = PVerde
+    DFConLoc['CAMBIO_RADICAL']     = PCamRa
+    DFConLoc['CENTRO_DEMOCRATICO'] = PCenDem
+    DFConLoc['PARTIDO_CONSERVADOR']= PConsev
+    DFConLoc['PARTIDO_LIBERAL']    = PLibera
+    DFConLoc['POLO_DEMOCRATICO']   = PPoloDe
+    DFConLoc['PARTIDO_U']          = PDelaU
+    DFConLoc['PARTIDO_GANADOR']    = PGanador
+    
+    
+    DFConLoc                       = DFConLoc.reset_index(drop=True)
+
+
+Whe       = np.where(Coor_PV['Nombre de localidad']== 'FONTIBÓN')
+WhoX      = []
+WhoY      = []
+Col_PT    = []
+num       = []
+name      = []
+
+
+Col       = [[44/255,192/255,95/255,1],[136/255,86/255,167/255,1],[158/255,202/255,225/255,1],
+             [0,0,1,1],[1,0,0,1],[0,0,0,1],[0,0,0,1]]
+
+for i in range(len(DFConLoc)):
+    num.append([Coor_PV['Número del puesto'][Whe[0][i]]][0])
+    name.append([Coor_PV['Nombre del puesto'][Whe[0][i]]][0])
+    WhoX.append([Coor_PV['CoorX'][Whe[0][i]]][0])
+    WhoY.append([Coor_PV['CoorY'][Whe[0][i]]][0])
+    
+    Col_PT.append(Col[DFConLoc['PARTIDO_GANADOR'][i]])
+    
+
+logging.basicConfig(level=logging.INFO)
+geovoronoi_log = logging.getLogger('geovoronoi')
+geovoronoi_log.setLevel(logging.INFO)
+geovoronoi_log.propagate = True
+
+#%%
+
+area = LocShape[LocShape.LOCNOMBRE == 'FONTIBÓN']
+assert len(area) == 1
+
+#area = area.to_crs(epsg=3395)    # convert to World Mercator CRS
+
+area_shapeZ9 = area.iloc[0].geometry   # get the Polygon
+
+coords = np.vstack((WhoX, WhoY)).T
+
+ptsZ9 = [p for p in coords_to_points(coords) if p.within(area_shapeZ9)]  # converts to shapely Point
+del coords   # not used any more
+
+region_polysZ9, region_ptsZ9, unassigned_ptsZ9 = voronoi_regions_from_coords(ptsZ9, area_shapeZ9,
+                                                                       return_unassigned_points=True,
+                                                                       per_geom=True)  # this is the default
+
+Col_PG    = []
+numP      = []
+
+for i in range(len(region_ptsZ9)):
+    numP.append(num[region_ptsZ9[i][0]])
+    Col_PG.append(Col_PT[region_ptsZ9[i][0]])
+
+
+Partidos = ['PARTIDO ALIANZA VERDE','PARTIDO CAMBIO RADICAL','PARTIDO CENTRO DEMOCRÁTICO','PARTIDO CONSERVADOR COLOMBIANO'
+            ,'PARTIDO LIBERAL COLOMBIANO','PARTIDO POLO DEMOCRÁTICO ALTERNATIVO','PARTIDO SOCIAL DE UNIDAD NACIONAL PARTIDO DE LA U']
+
+Votos    = []
+
+for i in range(len(Partidos)):
+    Cond     = CBOG2018['partido']==Partidos[i]
+    Votos.append(sum(Cond*CBOG2018['votos']))
+    
+Gan       = np.where(np.array(Votos)==max(Votos))[0]
+Col_GB    = Col[int(Gan)]
+
+
+os.chdir('Figures')
+
+fig, ax = plt.subplots(figsize=(9*cm, 12*cm))
+(LocShape.drop(8)).plot(ax=ax, color=Col_GB)
+vias.plot(ax=ax,linewidth=0.1,color = (0,0,0),alpha=0.5)
+plt.ylim(475000,540000)
+ax.axis('off')
+fig.tight_layout()
+
+plt.savefig('2018_CONGRESO_BOGOTA.pdf')
+
+os.chdir('..')
+
+
+Zona         = []
+PVerde       = []
+PCamRa       = []
+PCenDem      = []
+PConsev      = []
+PLibera      = []
+PPoloDe      = []
+PDelaU       = []
+PGanador     = []
+
+Partidos = ['PARTIDO ALIANZA VERDE','PARTIDO CAMBIO RADICAL','PARTIDO CENTRO DEMOCRÁTICO','PARTIDO CONSERVADOR COLOMBIANO'
+            ,'PARTIDO LIBERAL COLOMBIANO','PARTIDO POLO DEMOCRÁTICO ALTERNATIVO','PARTIDO SOCIAL DE UNIDAD NACIONAL PARTIDO DE LA U']
+
+
+
+for i in range(len(LocShape)):
+    VotosPuesto = []
+    
+    Zn       = int(LocShape['LOCCODIGO'][i])
+    
+    Zona.append(Zn)
+
+    con      = CongBog2018[Zn]['Partido']=='PARTIDO ALIANZA VERDE'
+    PVerde.append(sum(con*CongBog2018[Zn]['Votos']))
+    VotosPuesto.append(sum(con*CongBog2018[Zn]['Votos']))
+
+    con      = CongBog2018[Zn]['Partido']=='PARTIDO CAMBIO RADICAL'
+    PCamRa.append(sum(con*CongBog2018[Zn]['Votos']))
+    VotosPuesto.append(sum(con*CongBog2018[Zn]['Votos']))
+
+    con      = CongBog2018[Zn]['Partido']=='PARTIDO CENTRO DEMOCRÁTICO'
+    PCenDem.append(sum(con*CongBog2018[Zn]['Votos']))
+    VotosPuesto.append(sum(con*CongBog2018[Zn]['Votos']))
+
+    con      = CongBog2018[Zn]['Partido']=='PARTIDO CONSERVADOR COLOMBIANO'
+    PConsev.append(sum(con*CongBog2018[Zn]['Votos']))
+    VotosPuesto.append(sum(con*CongBog2018[Zn]['Votos']))
+
+    con      = CongBog2018[Zn]['Partido']=='PARTIDO LIBERAL COLOMBIANO'
+    PLibera.append(sum(con*CongBog2018[Zn]['Votos']))
+    VotosPuesto.append(sum(con*CongBog2018[Zn]['Votos']))
+
+    con      = CongBog2018[Zn]['Partido']=='PARTIDO POLO DEMOCRÁTICO ALTERNATIVO'
+    PPoloDe.append(sum(con*CongBog2018[Zn]['Votos']))
+    VotosPuesto.append(sum(con*CongBog2018[Zn]['Votos']))
+
+    con      = CongBog2018[Zn]['Partido']=='PARTIDO SOCIAL DE UNIDAD NACIONAL PARTIDO DE LA U'
+    PDelaU.append(sum(con*CongBog2018[Zn]['Votos']))
+    VotosPuesto.append(sum(con*CongBog2018[Zn]['Votos']))
+    
+    PGanador.append(int(np.where(np.array(VotosPuesto)==max(VotosPuesto))[0]))
+    
+DFConBOG = pd.DataFrame()
+
+DFConBOG['ZONA']               = Zona
+DFConBOG['PARTIDO_VERDE']      = PVerde
+DFConBOG['CAMBIO_RADICAL']     = PCamRa
+DFConBOG['CENTRO_DEMOCRATICO'] = PCenDem
+DFConBOG['PARTIDO_CONSERVADOR']= PConsev
+DFConBOG['PARTIDO_LIBERAL']    = PLibera
+DFConBOG['POLO_DEMOCRATICO']   = PPoloDe
+DFConBOG['PARTIDO_U']          = PDelaU
+DFConBOG['PARTIDO_GANADOR']    = PGanador
+    
+DFConBOG                       = DFConBOG.reset_index(drop=True)
+
+Col_GLoc                       = []
+
+for i in range(len(DFConBOG)):
+    Col_GLoc.append(Col[int(DFConBOG['PARTIDO_GANADOR'][i])])
+
+
+os.chdir('Figures')
+
+fig, ax = plt.subplots(figsize=(9*cm, 12*cm))
+(LocShape.drop(8)).plot(ax=ax, color=Col_GLoc)
+vias.plot(ax=ax,linewidth=0.1,color = (0,0,0),alpha=0.5)
+plt.ylim(475000,540000)
+ax.axis('off')
+fig.tight_layout()
+
+plt.savefig('2018_CONGRESO_LOC.pdf')
+
+os.chdir('..')
+
+
+os.chdir('Figures')
+
+Who = 'VOTOS/MESAS'
+fig, ax = plt.subplots(figsize=(9*cm, 12*cm))
+(LocShape.drop(8)).plot(ax=ax, column=DFLocCJ.drop(8)[Who], legend=True,legend_kwds={'label': "Votos/Mesas",'orientation': "vertical"})
+vias.plot(ax=ax,linewidth=0.1,color = (0,0,0),alpha=0.5)
+plt.ylim(475000,540000)
+ax.axis('off')
+fig.tight_layout()
+plt.savefig('2022_JUVINADO_LOC_VOTOS_MESAS.pdf')
+
+
+Who = 'TOTAL_VOTOS'
+fig, ax = plt.subplots(figsize=(9*cm, 12*cm))
+(LocShape.drop(8)).plot(ax=ax, column=DFLocCJ.drop(8)[Who],cmap='YlOrRd', legend=True,legend_kwds={'label': "Total Votos",'orientation': "vertical"})
+vias.plot(ax=ax,linewidth=0.1,color = (0,0,0),alpha=0.5)
+plt.ylim(475000,540000)
+ax.axis('off')
+fig.tight_layout()
+plt.savefig('2022_JUVINADO_LOC_VOTOS.pdf')
+
+
+fig, ax = subplot_for_map(figsize=(9*cm, 9*cm))
+plot_voronoi_polys_with_points_in_area(ax, area_shapeJT, region_polysJT, ptsJT, points_color=(1,0,0), area_color=(0, 1, 0.1, 0.8),area_edgecolor='none',
+                                       voronoi_color=Col_VT_JT,voronoi_labels=num2, voronoi_label_fontsize=5,voronoi_label_color = (0,0,0))
+plt.xlim(-8258700,-8249000)
+plt.ylim(515000,526000)
+vias.plot(ax=ax,linewidth=0.1,color = (0,0,0),alpha=0.5)
+ax.axis('off')
+fig.tight_layout()
+plt.savefig('2019_TRIANA_FONTIBON_VOTOS.pdf')
+
+
+fig, ax = subplot_for_map(figsize=(9*cm, 9*cm))
+plot_voronoi_polys_with_points_in_area(ax, area_shapeJT, region_polysJT, ptsJT, points_color=(1,0,0), area_color=(1, 1, 0.1, 0.8),area_edgecolor='none',
+                                       voronoi_color=Col_VM_JT,voronoi_labels=num2, voronoi_label_fontsize=5,voronoi_label_color = (0,0,0))
+
+plt.xlim(-8258700,-8249000)
+plt.ylim(515000,526000)
+vias.plot(ax=ax,linewidth=0.1,color = (0,0,0),alpha=0.5)
+ax.axis('off')
+fig.tight_layout()
+plt.savefig('2019_TRIANA_FONTIBON_VOTOS_MESA.pdf')
+
+
+fig, ax = subplot_for_map(figsize=(9*cm, 9*cm))
+plot_voronoi_polys_with_points_in_area(ax, area_shapeZ9, region_polysZ9, ptsZ9, points_color=(1,0,0),area_edgecolor='none',
+                                       voronoi_color=Col_PG)
+plt.xlim(-8258700,-8249000)
+plt.ylim(515000,526000)
+vias.plot(ax=ax,linewidth=0.1,color = (0,0,0),alpha=0.5)
+ax.axis('off')
+fig.tight_layout()
+plt.savefig('2018_CONGRESO_FONTIBON.pdf')
+
+os.chdir('..')
