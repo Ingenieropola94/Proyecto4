@@ -45,8 +45,6 @@ vias = gpd.read_file('Malla_Vial_Integral_Bogota_D_C/Malla_Vial_Integral_Bogota_
 os.chdir('..')
 
 
-os.chdir('Output')
-
 NumMesas  = []
 TotVot    = []
 
@@ -65,10 +63,6 @@ DFLocCJ['VOTOS/MESAS'] = np.array(TotVot)/np.array(NumMesas)
 
 DFLocCJ.to_csv('2022_JUVINADO_Localidades.csv')
 
-os.chdir('..')
-
-
-os.chdir('Output')
 
 WhoP      = np.unique(JAL2019Z9['NOM_SITIO'])
 
@@ -98,7 +92,6 @@ DFJTLoc = DFJTLoc.reset_index(drop=True)
 
 DFJTLoc.to_csv('2019_TRIANA_Fontibon.csv')
 
-os.chdir('..')
 
 Whe       = np.where(Coor_PV['Nombre de localidad']== 'FONTIBÓN')
 WhoX      = []
@@ -318,7 +311,6 @@ Gan       = np.where(np.array(Votos)==max(Votos))[0]
 Col_GB    = Col[int(Gan)]
 
 
-os.chdir('Figures')
 
 fig, ax = plt.subplots(figsize=(9*cm, 12*cm))
 (LocShape.drop(8)).plot(ax=ax, color=Col_GB)
@@ -329,7 +321,6 @@ fig.tight_layout()
 
 plt.savefig('2018_CONGRESO_BOGOTA.pdf')
 
-os.chdir('..')
 
 
 Zona         = []
@@ -404,7 +395,6 @@ for i in range(len(DFConBOG)):
     Col_GLoc.append(Col[int(DFConBOG['PARTIDO_GANADOR'][i])])
 
 
-os.chdir('Figures')
 
 fig, ax = plt.subplots(figsize=(9*cm, 12*cm))
 (LocShape.drop(8)).plot(ax=ax, color=Col_GLoc)
@@ -415,10 +405,6 @@ fig.tight_layout()
 
 plt.savefig('2018_CONGRESO_LOC.pdf')
 
-os.chdir('..')
-
-
-os.chdir('Figures')
 
 Who = 'VOTOS/MESAS'
 fig, ax = plt.subplots(figsize=(9*cm, 12*cm))
@@ -472,5 +458,3 @@ vias.plot(ax=ax,linewidth=0.1,color = (0,0,0),alpha=0.5)
 ax.axis('off')
 fig.tight_layout()
 plt.savefig('2018_CONGRESO_FONTIBON.pdf')
-
-os.chdir('..')
